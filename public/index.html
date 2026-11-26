@@ -1,0 +1,201 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Chess Master AI</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
+<style>
+*{box-sizing:border-box}
+body{
+ margin:0;background:#15191c;color:#eee;
+ font-family:Arial,sans-serif;text-align:center
+}
+header{padding:20px;font-size:26px;font-weight:bold}
+main{max-width:550px;margin:auto;padding:12px}
+#board{
+ display:grid;grid-template-columns:repeat(8,1fr);
+ width:100%;aspect-ratio:1;border:4px solid #343b37;
+ border-radius:5px;overflow:hidden
+}
+.square{
+ aspect-ratio:1;display:flex;align-items:center;
+ justify-content:center;font-size:min(10.5vw,50px);
+ border:0;padding:0;cursor:pointer
+}
+.light{background:#eeeed2}
+.dark{background:#769656}
+.selected{background:#baca44!important}
+button.action{
+ padding:14px 22px;margin:12px;border:0;
+ border-radius:8px;background:#81b64c;color:white;
+ font-weight:bold;font-size:17px
+}
+#status{margin:14px;font-size:17px;min-height:24px}
+</style>
+</head>
+<body>
+<header>♟ Chess Master AI</header>
+<main>
+ <div id="status">Press Start Game</div>
+ <button class="action" id="start">Start Game</button>
+ <div id="board"></div>
+</main>
+<script>
+const game = new Chess();
+const boardEl = document.getElementById("board");
+const statusEl = document.getElementById("status");
+
+const symbols = {
+ p:"♟",r:"♜",n:"♞",b:"♝",q:"♛",k:"♚",
+ P:"♙",R:"♖",N:"♘",B:"♗",Q:"♕",K:"♔"
+};
+
+let selected = null;
+let running = false;
+let busy = false;
+
+function render(){
+ boardEl.innerHTML="";
+ const board=game.board();
+
+ for(let r=0;r<8;r++){
+  for(let c=0;c<8;c++){
+   const sq=String.fromCharCode(97+c)+(8-r);
+   const piece=board[r][c];
+   const btn=document.createElement("button");
+
+   btn.className="square "+((r+c)%2?"dark":"light");
+   if(selected===sq)btn.classList.add("selected");
+   btn.textContent=piece?symbols[piece.color==="w"
+     ?piece.type.toUpperCase():piece.type]:"";
+   btn.onclick=()=>clickSquare(sq);
+   boardEl.appendChild(btn);
+  }
+ }
+}
+
+function updateStatus(){
+ if(game.in_checkmate()){
+  statusEl.textContent="Checkmate! "+(game.turn()==="w"?"Black":"White")+" wins.";
+ }else if(game.in_draw()){
+  statusEl.textContent="Draw!";
+ }else if(game.in_check()){
+  statusEl.textContent="Check!";
+ }else{
+  statusEl.textContent=game.turn()==="w"?"Your turn":"AI thinking...";
+ }
+}
+
+async function clickSquare(sq){
+ if(!running||busy||game.game_over()||game.turn()!=="w")return;
+
+ if(!selected){
+  const p=game.get(sq);
+  if(p&&p.color==="w"){
+   selected=sq;render();
+  }
+  return;
+ }
+
+ const move=game.move({from:selected,to:sq,promotion:"q"});
+ selected=null;
+
+ if(!move){
+  const p=game.get(sq);
+  if(p&&p.color==="w")selected=sq;
+  render();
+  return;
+ }
+
+ render();
+ updateStatus();
+
+ if(game.game_over()){
+  await submitGame();
+  return;
+ }
+
+ await aiMove();
+}
+
+async function aiMove(){
+ busy=true;
+ updateStatus();
+
+ try{
+  const response=await fetch("/api/move",{
+   method:"POST",
+   headers:{"Content-Type":"application/json"},
+   body:JSON.stringify({fen:game.fen()})
+  });
+
+  if(!response.ok)throw new Error("AI server unavailable");
+
+  const data=await response.json();
+  const move=game.move(data.move,{sloppy:true});
+
+  if(!move)throw new Error("Invalid AI move");
+
+  render();
+  updateStatus();
+
+  if(game.game_over())await submitGame();
+ }catch(e){
+  statusEl.textContent="AI error: "+e.message;
+ }
+
+ busy=false;
+}
+
+function makePGN(){
+ let result="*";
+
+ if(game.in_checkmate()){
+  result=game.turn()==="w"?"0-1":"1-0";
+ }else if(game.in_draw()){
+  result="1/2-1/2";
+ }
+
+ return '[Event "Chess Master AI"]\n' +
+        '[Result "'+result+'"]\n\n' +
+        game.pgn() + " " + result;
+}
+
+async function submitGame(){
+ running=false;
+ busy=true;
+ statusEl.textContent="Submitting completed game...";
+
+ try{
+  const response=await fetch("/api/train",{
+   method:"POST",
+   headers:{"Content-Type":"application/json"},
+   body:JSON.stringify({pgn:makePGN()})
+  });
+
+  const data=await response.json();
+  if(!response.ok)throw new Error(data.error||"Training failed");
+
+  statusEl.textContent="Completed game submitted.";
+ }catch(e){
+  statusEl.textContent="Game finished. Submission failed: "+e.message;
+ }
+
+ busy=false;
+}
+
+document.getElementById("start").onclick=()=>{
+ game.reset();
+ selected=null;
+ busy=false;
+ running=true;
+ render();
+ updateStatus();
+};
+
+render();
+</script>
+</body>
+</html>
